@@ -40,7 +40,7 @@ export function createScoreHandler(config: ScorerConfig) {
   return async function POST(req: NextRequest): Promise<Response> {
     try {
       const body = await req.json();
-      const { question, response, threadId, messageId } = body as ScoreRequest;
+      const { question, response, threadId, messageId, toolResults } = body as ScoreRequest;
 
       if (!question || !response) {
         return Response.json({ error: "question and response are required" }, { status: 400 });
@@ -53,7 +53,7 @@ export function createScoreHandler(config: ScorerConfig) {
         );
       }
 
-      const request: ScoreRequest = { question, response, threadId, messageId };
+      const request: ScoreRequest = { question, response, threadId, messageId, toolResults };
       const result  = await scoreResponse(request, config, _queryFn);
 
       // Persist asynchronously (fire-and-forget — does not block response)

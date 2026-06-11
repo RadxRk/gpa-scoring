@@ -122,7 +122,7 @@ export function GpaScoreBadge({ score, threshold = 2, dimensions }: GpaScoreBadg
   }
 
   // Collect dimensions to show
-  const dimOrder: Dimension[] = dimensions ?? ["GF", "LC", "EE", "PQ", "PA"];
+  const dimOrder: Dimension[] = dimensions ?? ["GF", "LC", "HD", "EE", "PQ", "PA"];
   const toShow = dimOrder.filter(d => {
     const ds = (score as Record<string, unknown>)[d] as { value: number; label: string; reasoning: string } | undefined;
     return ds && typeof ds.value === "number";
