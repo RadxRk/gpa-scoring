@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS ${table} (
   response_preview TEXT,
   gf_score         NUMBER, gf_label  VARCHAR, gf_reasoning  TEXT,
   lc_score         NUMBER, lc_label  VARCHAR, lc_reasoning  TEXT,
+  hd_score         NUMBER, hd_label  VARCHAR, hd_reasoning  TEXT,
   ee_score         NUMBER, ee_label  VARCHAR, ee_reasoning  TEXT,
   pq_score         NUMBER, pq_label  VARCHAR, pq_reasoning  TEXT,
   pa_score         NUMBER, pa_label  VARCHAR, pa_reasoning  TEXT,
@@ -31,6 +32,9 @@ CREATE TABLE IF NOT EXISTS ${table} (
 // Columns added in newer versions — ALTER adds them if missing on existing tables
 const MIGRATION_SQLS = (table: string) => [
   `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS agent_name    VARCHAR`,
+  `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS hd_score      NUMBER`,
+  `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS hd_label      VARCHAR`,
+  `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS hd_reasoning  TEXT`,
   `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS ee_score      NUMBER`,
   `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS ee_label      VARCHAR`,
   `ALTER TABLE IF EXISTS ${table} ADD COLUMN IF NOT EXISTS ee_reasoning  TEXT`,
@@ -89,6 +93,7 @@ export async function persistScore(
 
     const g  = scores.GF;
     const lc = scores.LC;
+    const hd = scores.HD;
     const ee = scores.EE;
     const pq = scores.PQ;
     const pa = scores.PA;
@@ -99,6 +104,7 @@ export async function persistScore(
         question, response_preview,
         gf_score, gf_label, gf_reasoning,
         lc_score, lc_label, lc_reasoning,
+        hd_score, hd_label, hd_reasoning,
         ee_score, ee_label, ee_reasoning,
         pq_score, pq_label, pq_reasoning,
         pa_score, pa_label, pa_reasoning,
@@ -111,6 +117,7 @@ export async function persistScore(
         '${esc(request.response.slice(0, 500))}',
         ${g  ? g.value  : "NULL"}, '${esc(g?.label  || "")}', '${esc(g?.reasoning  || "")}',
         ${lc ? lc.value : "NULL"}, '${esc(lc?.label || "")}', '${esc(lc?.reasoning || "")}',
+        ${hd ? hd.value : "NULL"}, '${esc(hd?.label || "")}', '${esc(hd?.reasoning || "")}',
         ${ee ? ee.value : "NULL"}, '${esc(ee?.label || "")}', '${esc(ee?.reasoning || "")}',
         ${pq ? pq.value : "NULL"}, '${esc(pq?.label || "")}', '${esc(pq?.reasoning || "")}',
         ${pa ? pa.value : "NULL"}, '${esc(pa?.label || "")}', '${esc(pa?.reasoning || "")}',

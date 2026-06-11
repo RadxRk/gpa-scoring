@@ -5,7 +5,7 @@
 
 import {
   Dimension, DimensionScore, GpaScore, ScoreLabel,
-  ScorerConfig, ScoreRequest, ScoreResult,
+  ScorerConfig, ScoreRequest, ScoreResult, ToolResult,
   DEFAULT_SCORER_CONFIG, DIMENSION_RUBRICS,
 } from "./types";
 import { prepareResponse } from "./response-prep";
@@ -23,12 +23,39 @@ function scoreToLabel(v: number): ScoreLabel {
   return "Low";
 }
 
+// Builds the "ACTUAL DATA RETURNED BY TOOLS" block for HD Level 2 (grounded check).
+// Returns "" when HD is not requested or no tool results were supplied (→ HD Level 1).
+function buildGroundingBlock(
+  dimensions:  Dimension[],
+  toolResults: ToolResult[] | undefined
+): string {
+  if (!dimensions.includes("HD") || !toolResults || toolResults.length === 0) return "";
+
+  const toolLines = toolResults.map((t, i) => {
+    const label = t.name ? `Tool result ${i + 1} (${t.name})` : `Tool result ${i + 1}`;
+    return `   ${label}:\n     ${t.content}`;
+  }).join("\n");
+
+  return `
+
+ACTUAL DATA RETURNED BY TOOLS:
+${toolLines}
+
+For HD (Hallucination Detection), compare the agent's stated facts against the tool data above:
+   3 = Response accurately reflects the tool data
+   2 = Minor rounding but no misleading numbers
+   1 = Some discrepancies that could mislead decisions
+   0 = Response directly contradicts the tool data
+A large discrepancy in a critical value (e.g. a 10x decimal shift) is a high-impact error.`;
+}
+
 function buildPrompt(
-  question:   string,
-  response:   string,
-  tier:       string,
-  origLen:    number,
-  dimensions: Dimension[]
+  question:    string,
+  response:    string,
+  tier:        string,
+  origLen:     number,
+  dimensions:  Dimension[],
+  toolResults?: ToolResult[]
 ): string {
   const rubrics = dimensions.map(d => {
     const r = DIMENSION_RUBRICS[d];
@@ -37,6 +64,8 @@ function buildPrompt(
       .join("\n");
     return `${r.key} — ${r.name}: ${r.description}\n${levels}`;
   }).join("\n\n");
+
+  const grounding = buildGroundingBlock(dimensions, toolResults);
 
   const keys = dimensions.map(d => `"${d.toLowerCase()}_score": <0-3>, "${d.toLowerCase()}_reasoning": "<one sentence>"`).join(", ");
 
@@ -49,7 +78,7 @@ ${response}
 
 Score each dimension from 0 to 3:
 
-${rubrics}
+${rubrics}${grounding}
 
 Return ONLY valid JSON — no extra text:
 {${keys}}`;
@@ -81,7 +110,7 @@ export async function scoreResponse(
   );
 
   // Build and execute scoring prompt
-  const prompt        = buildPrompt(truncatedQ, responseContent, tier, rawResponse.length, cfg.dimensions);
+  const prompt        = buildPrompt(truncatedQ, responseContent, tier, rawResponse.length, cfg.dimensions, request.toolResults);
   const escapedPrompt = esc(prompt);
 
   let raw = "";

@@ -24,6 +24,7 @@ GF: High (3/3)    LC: Good (2/3)
 - [How it looks](#how-it-looks)
 - [How it works](#how-it-works)
 - [Scoring dimensions](#scoring-dimensions)
+- [Hallucination Detection (HD)](#hallucination-detection-hd)
 - [Prerequisites](#prerequisites)
 - [Quick start](#quick-start)
 - [Configuration reference](#configuration-reference)
@@ -99,21 +100,24 @@ The chosen tier is recorded in the `tier` column so you can analyse it later.
 
 ## Scoring dimensions
 
-| Key | Name | Needs execution trace? | Status |
+| Key | Name | Needs extra input? | Status |
 |-----|------|:---:|--------|
 | **GF** | Goal Fulfillment — did it answer the question completely & accurately? | No | ✅ Implemented |
 | **LC** | Logical Consistency — is the reasoning internally consistent? | No | ✅ Implemented |
-| **EE** | Execution Efficiency — minimal, non-redundant steps? | **Yes** | ⚠️ Rubric defined, **trace not yet wired** |
-| **PQ** | Plan Quality — was an effective plan designed? | **Yes** | ⚠️ Rubric defined, **trace not yet wired** |
-| **PA** | Plan Adherence — did it follow the stated plan? | **Yes** | ⚠️ Rubric defined, **trace not yet wired** |
+| **HD** | Hallucination Detection — are claims/numbers/citations grounded, not fabricated? | No (Level 1) · tool results (Level 2) | ✅ Implemented |
+| **EE** | Execution Efficiency — minimal, non-redundant steps? | Execution trace | ⚠️ Rubric defined, **trace not yet wired** |
+| **PQ** | Plan Quality — was an effective plan designed? | Execution trace | ⚠️ Rubric defined, **trace not yet wired** |
+| **PA** | Plan Adherence — did it follow the stated plan? | Execution trace | ⚠️ Rubric defined, **trace not yet wired** |
 
-**GF** and **LC** work from the response text alone, are evaluated in a single LLM
-call (~2–3 s, ~800–2 000 tokens), and are production-ready.
+**GF**, **LC**, and **HD** work from the response text alone, are evaluated in a single
+LLM call (~2–3 s, ~800–2 000 tokens), and are production-ready. HD becomes a stronger,
+evidence-based check when you also pass the agent's tool results — see
+[Hallucination Detection](#hallucination-detection-hd).
 
 > ⚠️ **EE / PQ / PA are not functional yet.** Their rubrics exist and the storage
 > columns are in place, but the scoring request carries no execution trace, so the
 > judge has nothing to evaluate them against. See [Known limitations](#known-limitations).
-> Keep `dimensions: ["GF", "LC"]` until trace plumbing lands.
+> Keep `dimensions: ["GF", "LC", "HD"]` until trace plumbing lands.
 
 ### Score scale
 
@@ -126,6 +130,75 @@ call (~2–3 s, ~800–2 000 tokens), and are production-ready.
 
 When `GF < lowConfidenceThreshold` (default `2`), the badge is accompanied by an amber
 "low confidence" banner suggesting the user rephrase.
+
+## Hallucination Detection (HD)
+
+HD flags fabricated content — invented statistics, malformed or made-up identifiers,
+non-existent citations, and (most importantly) numbers that contradict the data the agent
+actually retrieved. It runs at two levels of depth.
+
+### Level 1 — LLM judge (default)
+
+Enable HD by adding it to `dimensions`. It's scored by the **same** `claude-haiku-4-5` call
+that evaluates GF and LC, so there's **no extra latency or cost**:
+
+```typescript
+export const POST = createScoreHandler({
+  agentName:  "MY_AGENT",
+  dimensions: ["GF", "LC", "HD"],   // ← add HD
+});
+```
+
+The badge then renders a third pill:
+
+```
+GF: High (3/3)    LC: Good (2/3)    HD: High (3/3)
+```
+
+Level 1 is a *judgement from the response text alone* — "does this look fabricated?" It
+catches invented citations and implausible numbers, but it **cannot** catch a plausible-
+looking number that happens to be wrong.
+
+### Level 2 — grounded check (pass tool results)
+
+Level 1 can't tell that `8.2%` should have been `0.82%` — both look like believable
+clinical numbers. Level 2 closes that gap by giving the judge the **actual data the agent's
+tools returned**, so it compares stated facts against ground truth.
+
+Pass the captured tool results alongside the response — that's the only change:
+
+```typescript
+triggerScore({
+  question,
+  response,
+  threadId,
+  messageId,
+  toolResults: [
+    // raw payloads your agent's tool/SSE events returned
+    { name: "acctmodel",         content: '{"PHASE":"PHASE3","SERIOUS_AE_RATE":0.82}' },
+    { name: "AdverseEventSearch", content: '[{"organ_system":"Cardiac disorders","rate":0.0082}]' },
+  ],
+});
+```
+
+When `toolResults` are present **and** HD is enabled, the scorer appends an
+`ACTUAL DATA RETURNED BY TOOLS` block to the judge prompt and grades HD on whether the
+response matches that data:
+
+| HD score | Grounded meaning |
+|:---:|------------------|
+| 3 | Response accurately reflects the tool data |
+| 2 | Minor rounding, but no misleading numbers |
+| 1 | Some discrepancies that could mislead decisions |
+| 0 | Response directly contradicts the tool data |
+
+This catches the mismatch classes Level 1 misses: number/decimal discrepancies, wrong
+entity, invented rows, unit confusion, and dropped qualifiers (e.g. "serious" AEs reported
+as all AEs). `toolResults` is optional — omit it and HD gracefully falls back to Level 1.
+
+> The `ToolResult` shape is `{ name?: string; type?: string; content: string }`, where
+> `content` is the raw (usually JSON) payload the tool returned. Most agents already
+> capture these from `tool_result` SSE events.
 
 ## Prerequisites
 
@@ -269,7 +342,7 @@ most callers never touch the fields by hand.
 createScoreHandler({
   agentName:         "MY_AGENT",          // required — stored in history table
   judgeModel:        "claude-haiku-4-5",  // any CORTEX.COMPLETE model
-  dimensions:        ["GF", "LC"],        // GF/LC ready; EE/PQ/PA need trace (see limitations)
+  dimensions:        ["GF", "LC", "HD"],  // GF/LC/HD ready; EE/PQ/PA need trace (see limitations)
   maxQuestionChars:  1000,                // question truncation limit
   responseTiers: {
     fullUpTo:    8000,                     // ≤ this → use full response
@@ -287,7 +360,7 @@ createScoreHandler({
 |--------|---------|-------------|
 | `agentName` | *(required)* | Label stored in score history |
 | `judgeModel` | `claude-haiku-4-5` | Any `CORTEX.COMPLETE` model |
-| `dimensions` | `["GF", "LC"]` | Dimensions to evaluate |
+| `dimensions` | `["GF", "LC"]` | Dimensions to evaluate (add `"HD"` for hallucination detection) |
 | `maxQuestionChars` | `1000` | Question truncation limit |
 | `responseTiers.fullUpTo` | `8000` | Use full response up to this length |
 | `responseTiers.extractUpTo` | `30000` | Extract up to this length, summarise above |
@@ -363,22 +436,29 @@ rescoreAll(messages, threadId, (id, score) => updateMessage(id, { gpaScore: scor
 These are deliberate trade-offs or known gaps. Full detail in
 [`docs/TECHNICAL_SPEC.md`](docs/TECHNICAL_SPEC.md#known-limitations).
 
-1. **EE / PQ / PA have no trace input.** `ScoreRequest` carries only `question` and
-   `response`; the prompt never receives the agent's execution trace. Enabling these
-   dimensions asks the judge to grade plan/execution quality it cannot see. **Keep
-   them off** until a `trace` field is plumbed through `ScoreRequest` → `buildPrompt`.
-2. **Tier-2 extraction is domain-specific.** `PV_PATTERN` in `response-prep.ts` matches
+1. **EE / PQ / PA have no trace input.** `ScoreRequest` carries `question`, `response`, and
+   (for HD) `toolResults`, but no agent execution *trace*. Enabling these dimensions asks
+   the judge to grade plan/execution quality it cannot see. **Keep them off** until a
+   `trace` field is plumbed through `ScoreRequest` → `buildPrompt`.
+2. **HD Level 1 is heuristic.** Without `toolResults`, HD judges plausibility from the
+   response text alone — it catches obvious fabrications but not a plausible-looking number
+   that is simply wrong. Pass `toolResults` (Level 2) for grounded, evidence-based HD. The
+   quality of Level 2 is only as good as the tool payloads you supply.
+3. **Tier-2 extraction is domain-specific.** `PV_PATTERN` in `response-prep.ts` matches
    pharmacovigilance terms (PRR, ROR, MedDRA, FAERS…). Non-clinical agents get biased
    extraction. To be truly agent-agnostic, make the extraction pattern config-injectable.
-3. **SQL is built by string interpolation.** `esc()` escapes only `\` and `'` before
-   inlining the prompt into a `CORTEX.COMPLETE(...)` statement. Robust enough for the
-   current escaping, but bind variables would be safer.
-4. **Silent failure by design.** On any error the badge disappears with no user-facing
+   Note: HD Level 2 grounding can also be weakened by Tier-2/3 preparation if a long
+   response is summarised before scoring.
+4. **SQL is built by string interpolation.** `esc()` escapes only `\` and `'` before
+   inlining the prompt (now including `toolResults`) into a `CORTEX.COMPLETE(...)`
+   statement. Robust enough for the current escaping, but bind variables would be safer.
+5. **Silent failure by design.** On any error the badge disappears with no user-facing
    message — visibility comes only from `console.error`. Intentional, but worth knowing.
-5. **No dimension-completeness check.** If the model omits a requested dimension, it is
+6. **No dimension-completeness check.** If the model omits a requested dimension, it is
    silently dropped with no retry.
-6. **Batch re-score is uncapped.** `Promise.allSettled` over a long thread can issue
-   many parallel Cortex calls at once.
+7. **Batch re-score is uncapped.** `Promise.allSettled` over a long thread can issue
+   many parallel Cortex calls at once. (Batch re-score also does not forward `toolResults`,
+   so it always uses HD Level 1.)
 
 ## Troubleshooting
 
@@ -402,7 +482,8 @@ consoles while debugging. There is no user-facing error state by design.
   shapes, the scoring prompt, the storage schema, error semantics, and edge cases.
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the architecture, the reasoning behind each design
   decision, alternatives considered, and the roadmap for the trace-dependent dimensions.
-- `REALTIME_GPA_SCORING.pdf` — the original design deck.
+- `REALTIME_GPA_SCORING_new.pdf` — the current design deck (adds the Hallucination
+  Detection section). `REALTIME_GPA_SCORING.pdf` is the prior revision, kept for history.
 
 ## Backwards compatibility
 

@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS SIGNAL_DB.META_DATA.GPA_SCORE_HISTORY (
   lc_score          NUMBER,
   lc_label          VARCHAR,
   lc_reasoning      TEXT,
+  -- Hallucination Detection
+  hd_score          NUMBER,
+  hd_label          VARCHAR,
+  hd_reasoning      TEXT,
   -- Execution Efficiency (optional)
   ee_score          NUMBER,
   ee_label          VARCHAR,
@@ -47,15 +51,23 @@ SELECT
     COUNT(*)                     AS total,
     ROUND(AVG(gf_score), 2)      AS avg_gf,
     ROUND(AVG(lc_score), 2)      AS avg_lc,
+    ROUND(AVG(hd_score), 2)      AS avg_hd,
     SUM(CASE WHEN gf_score < 2 THEN 1 ELSE 0 END) AS low_confidence
 FROM SIGNAL_DB.META_DATA.GPA_SCORE_HISTORY
 GROUP BY 1, 2
 ORDER BY day DESC, agent_name;
 
--- Low-scoring responses to investigate
-SELECT agent_name, thread_id, question, gf_score, lc_score, gf_reasoning
+-- Low-scoring responses to investigate (low quality OR likely hallucination)
+SELECT agent_name, thread_id, question, gf_score, lc_score, hd_score, hd_reasoning
 FROM SIGNAL_DB.META_DATA.GPA_SCORE_HISTORY
-WHERE gf_score < 2 OR lc_score < 2
+WHERE gf_score < 2 OR lc_score < 2 OR hd_score < 2
+ORDER BY scored_at DESC
+LIMIT 20;
+
+-- Suspected hallucinations (HD flagged the response)
+SELECT agent_name, thread_id, question, response_preview, hd_score, hd_label, hd_reasoning
+FROM SIGNAL_DB.META_DATA.GPA_SCORE_HISTORY
+WHERE hd_score IS NOT NULL AND hd_score < 2
 ORDER BY scored_at DESC
 LIMIT 20;
 

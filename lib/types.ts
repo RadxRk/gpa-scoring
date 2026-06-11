@@ -5,7 +5,7 @@
 
 // ── Scoring dimensions ────────────────────────────────────────────────────────
 
-export type Dimension = "GF" | "LC" | "EE" | "PQ" | "PA";
+export type Dimension = "GF" | "LC" | "HD" | "EE" | "PQ" | "PA";
 
 export type ScoreLabel = "High" | "Good" | "Partial" | "Low";
 
@@ -18,6 +18,7 @@ export interface DimensionScore {
 export interface GpaScore {
   GF?: DimensionScore;     // Goal Fulfillment
   LC?: DimensionScore;     // Logical Consistency
+  HD?: DimensionScore;     // Hallucination Detection
   EE?: DimensionScore;     // Execution Efficiency
   PQ?: DimensionScore;     // Plan Quality
   PA?: DimensionScore;     // Plan Adherence
@@ -64,6 +65,16 @@ export const DIMENSION_RUBRICS: Record<Dimension, DimensionRubric> = {
       { score: 2, label: "Good",    description: "Minor inconsistencies that do not affect the outcome" },
       { score: 1, label: "Partial", description: "Noticeable inconsistencies or contradictory statements" },
       { score: 0, label: "Low",     description: "Major logical contradictions or incoherent reasoning" },
+    ],
+  },
+  HD: {
+    key: "HD", name: "Hallucination Detection",
+    description: "Are all claims, numbers, and citations grounded and free of fabrication?",
+    levels: [
+      { score: 3, label: "High",    description: "All claims verifiable; identifiers well-formed; no invented statistics or citations" },
+      { score: 2, label: "Good",    description: "Minor unverifiable claims but no clear fabrications; numbers appear plausible" },
+      { score: 1, label: "Partial", description: "Some suspicious statistics, vague citations, or implausible numbers that cannot be verified" },
+      { score: 0, label: "Low",     description: "Fabricated identifiers, invented statistics, non-existent citations, or data contradicting tool results" },
     ],
   },
   EE: {
@@ -139,11 +150,27 @@ export const DEFAULT_SCORER_CONFIG: Required<ScorerConfig> = {
 
 // ── Score request / response ──────────────────────────────────────────────────
 
+/**
+ * A single tool/query result captured during the agent's run.
+ * Supplied by the host app to enable HD Level 2 (grounded check) — the judge
+ * compares the agent's stated facts against this raw data.
+ */
+export interface ToolResult {
+  /** Tool/function name, e.g. "acctmodel" or "AdverseEventSearch" (optional). */
+  name?:    string;
+  /** Event type as emitted by the agent, e.g. "tool_result" (optional). */
+  type?:    string;
+  /** Raw result payload as returned by the tool — typically a JSON string. */
+  content:  string;
+}
+
 export interface ScoreRequest {
   question:   string;
   response:   string;
   threadId?:  string;
   messageId?: string;
+  /** Tool results for HD grounded check (Level 2). Omit for Level 1 HD. */
+  toolResults?: ToolResult[];
 }
 
 export interface ScoreResult {
